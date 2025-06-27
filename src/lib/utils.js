@@ -180,3 +180,9 @@ export const RoomRole = {
   EDITOR: "editor",
   VIEWER: "viewer"
 }
+
+export const assignUserColor = () => {
+  const colors = ["#FF5733", "#33FF57", "#3357FF", "#FF33A1", "#A133FF", "#FFA133"];
+  const numericId = Math.floor(Math.random() * 1000000);
+  return colors[numericId % colors.length];
+}

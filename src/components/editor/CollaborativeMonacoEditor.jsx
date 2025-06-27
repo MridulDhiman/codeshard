@@ -10,6 +10,8 @@ import {
 import { FileTabs } from "@codesandbox/sandpack-react";
 import { snakeCase } from "./MonacoEditor";
 import { useSocket } from "@/src/hooks/useSocket";
+import { assignUserColor, debounce } from "@/src/lib/utils";
+import { useAuth } from "@clerk/nextjs";
 // import { debounce } from "@/src/lib/utils";
 
 const CollaborativeMonacoEditor = ({ theme, roomId, roomFiles, readOnly = false }) => {
@@ -20,6 +22,9 @@ const CollaborativeMonacoEditor = ({ theme, roomId, roomFiles, readOnly = false 
     sendVisibleFiles,
     joinRoom,
     propagateRoomState,
+    sendCursorPosition,
+    remoteCursorPositions,
+    setRemoteCursorPositions,
   } = useSocket();
   const [isClient, setIsClient] = useState(false);
   const [isThemeLoaded, setIsThemeLoaded] = useState(false);
@@ -27,8 +32,9 @@ const CollaborativeMonacoEditor = ({ theme, roomId, roomFiles, readOnly = false 
   const { sandpack } = useSandpack();
   const { files, activeFile, updateCurrentFile, visibleFiles, updateFile } =
     sandpack;
-    const [editor, setEditor] = useState(null);
-    const timeoutRef = useRef(null);
+  const [editor, setEditor] = useState(null);
+  const timeoutRef = useRef(null);
+  const { userId } = useAuth();
 
 
   const code = files[activeFile]?.code || "";
@@ -85,7 +91,7 @@ const CollaborativeMonacoEditor = ({ theme, roomId, roomFiles, readOnly = false 
     if (visibleFiles?.length > 0) {
       const storedFiles = window.localStorage.getItem("visibleFiles");
       const parsedStoredFiles = storedFiles ? JSON.parse(storedFiles) : [];
-      
+
       if (JSON.stringify(parsedStoredFiles) !== JSON.stringify(visibleFiles)) {
         sendVisibleFiles({
           visibleFiles,
@@ -95,6 +101,105 @@ const CollaborativeMonacoEditor = ({ theme, roomId, roomFiles, readOnly = false 
       }
     }
   }, [visibleFiles, roomId, sendVisibleFiles]);
+
+
+  useEffect(() => {
+    console.log("remoteCursorPositions", remoteCursorPositions);
+    const currentUserId = userId; 
+    if (monaco) {
+
+    for(const remoteCursorPosition of Object.values(remoteCursorPositions)) {
+      if(remoteCursorPosition?.userId !== currentUserId && remoteCursorPosition?.activeFile === activeFile) {
+      const decorationId = remoteCursorPosition?.decorationId;
+      const position = remoteCursorPosition?.position;
+      const username = remoteCursorPosition?.username;
+      const user_id = remoteCursorPosition?.userId;
+      const color = remoteCursorPosition?.color;
+
+      const isNewCursor = !decorationId;
+      const newDecorations = editor.deltaDecorations(
+        isNewCursor ? [] : [decorationId],
+        [
+          {
+            range: new monaco.Range(
+              position.lineNumber,
+              position.column,
+              position.lineNumber,
+              position.column
+            ),
+            options: {
+              // Use inline style for color
+              inlineClassName: `remote-cursor-line-${user_id}`,
+              afterContentClassName: `remote-cursor-label-${user_id}`,
+            },
+          },
+        ]
+      );
+    
+        // Inject dynamic CSS for cursor + label
+  const styleElementId = `remote-cursor-style-${user_id}`;
+  let styleElement = document.getElementById(styleElementId);
+
+  if (!styleElement) {
+    styleElement = document.createElement('style');
+    styleElement.id = styleElementId;
+    document.head.appendChild(styleElement);
+  }
+
+  // Use Tailwind spacing/shape + inline color
+  styleElement.innerHTML = `
+    .remote-cursor-line-${user_id} {
+      border-left: 2px solid ${color};
+    }
+
+    .remote-cursor-label-${user_id}::after {
+      content: "${username}";
+      background: ${color};
+      color: white;
+      padding: 0.125rem 0.25rem; /* Tailwind px-1 py-0.5 */
+      border-radius: 0.25rem;     /* Tailwind rounded */
+      font-size: 0.75rem;         /* Tailwind text-xs */
+      position: absolute;
+      margin-left: 0.25rem;       /* Tailwind ml-1 */
+    }
+  `;
+
+      
+
+      console.log("new decorations", newDecorations);
+      if(newDecorations && newDecorations.length > 0) {
+
+      setRemoteCursorPositions((prev) => {
+          return {
+            ...prev,
+            [userId]: {
+              ...prev[userId],
+              decorationId: newDecorations?.[0] ?? undefined,
+            },
+          };
+        });
+    }
+    else {
+      console.log("no new decorations");
+    }
+  }
+  
+  }
+}
+
+return () => {
+  for(const remoteCursorPosition of Object.values(remoteCursorPositions)) {
+    if(remoteCursorPosition?.userId !== currentUserId && remoteCursorPosition?.activeFile === activeFile) {
+      const decorationId = remoteCursorPosition?.decorationId;
+      const _ = editor.deltaDecorations(
+        [decorationId],
+        []
+      );
+    }
+  }
+}
+
+  }, [remoteCursorPositions, userId, monaco]);
 
   // useEffect(() => {
   //   if (!isClient || !editorRef.current || !roomId) {
@@ -150,7 +255,7 @@ const CollaborativeMonacoEditor = ({ theme, roomId, roomFiles, readOnly = false 
     //   roomId: roomId,
     // });
     sendMessage({
-      activeFile: activeFile, 
+      activeFile: activeFile,
       data: value,
       roomId: roomId,
     });
@@ -167,16 +272,16 @@ const CollaborativeMonacoEditor = ({ theme, roomId, roomFiles, readOnly = false 
     setEditor(node);
 
     node.onDidChangeModelContent(() => {
-      if(timeoutRef.current) {
+      if (timeoutRef.current) {
         clearTimeout(timeoutRef.current);
       }
 
       timeoutRef.current = setTimeout(() => {
-      propagateRoomState({
+        propagateRoomState({
           roomId: roomId,
           fileName: activeFile,
           code: node.getValue(),
-          updateType : "debounce"
+          updateType: "debounce"
         });
       }, 5000); // save after 5s of inactivity
     });
@@ -187,7 +292,19 @@ const CollaborativeMonacoEditor = ({ theme, roomId, roomFiles, readOnly = false 
         roomId: roomId,
         fileName: activeFile,
         code: node.getValue(),
-        updateType : "blur"
+        updateType: "blur"
+      });
+    });
+
+    node.onDidChangeCursorPosition((e) => {
+      const position = e.position;
+      console.log("position", position);
+      debounce(sendCursorPosition, 1000)({
+        roomId: roomId,
+        position: position,
+        activeFile: activeFile,
+        userId: userId,
+        color: assignUserColor()
       });
     });
   });
@@ -217,23 +334,23 @@ const CollaborativeMonacoEditor = ({ theme, roomId, roomFiles, readOnly = false 
     <>
       <SandpackStack style={{ height: "92vh", margin: 0 }}>
         <FileTabs />
-          <Editor
-            key={activeFile}
-            height={"100vh"}
-            defaultLanguage="javascript"
-            theme={
-              theme === "vs-dark" || theme === "light"
+        <Editor
+          key={activeFile}
+          height={"100vh"}
+          defaultLanguage="javascript"
+          theme={
+            theme === "vs-dark" || theme === "light"
+              ? theme
+              : isThemeLoaded
                 ? theme
-                : isThemeLoaded
-                  ? theme
-                  : "vs-dark"
-            }
-            language={fileType}
-            onChange={onEditorChange}
-            defaultValue={code}
-            value={latestData[activeFile]?.code || code}
-            onMount={handleMount}
-          />
+                : "vs-dark"
+          }
+          language={fileType}
+          onChange={onEditorChange}
+          defaultValue={code}
+          value={latestData[activeFile]?.code || code}
+          onMount={handleMount}
+        />
       </SandpackStack>
     </>
   );

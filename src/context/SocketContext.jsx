@@ -18,6 +18,7 @@ const SocketProvider = ({ children }) => {
   const [latestData, setLatestData] = useState({});
   const [latestVisibleFiles, setLatestVisibleFiles] = useState([]);
   const [chatMessages, setChatMessages] = useState([]);
+  const [remoteCursorPositions, setRemoteCursorPositions] = useState({});
   const { user, isSignedIn } = useUser();
 
   const sendMessage = useCallback(
@@ -47,6 +48,23 @@ const SocketProvider = ({ children }) => {
         sender,
         timestamp,
         roomId,
+      });
+    },
+    [socket],
+  );
+
+  const sendCursorPosition = useCallback(
+    ({ roomId, position, activeFile, userId, color }) => {
+      if (!socket) {
+        console.log("socket not found");
+        return;
+      }
+      socket.emit("event:cursor-position", {
+        roomId,
+        position,
+        activeFile,
+        userId,
+        color,
       });
     },
     [socket],
@@ -133,6 +151,24 @@ const SocketProvider = ({ children }) => {
       setChatMessages((prev) => [...prev, message]);
     };
 
+    const cursorPositionMsg = ({userId, position, username, color, roomId, activeFile}) => {
+      console.log("cursor position from server: ", userId, position, username, color, roomId, activeFile);
+      const cursorPosition = {
+        userId,
+        position,
+        username,
+        color,
+        roomId,
+        activeFile,
+      };
+      setRemoteCursorPositions((prev) => {
+        return {
+          ...prev,
+          [cursorPosition.userId]: cursorPosition
+        };
+      });
+    };
+
     if (socket) {
       console.log("Socket is here");
     }
@@ -140,11 +176,13 @@ const SocketProvider = ({ children }) => {
     socket.on("event:server-message", dataMsg);
     socket.on("event:sync-visible-files", filesMsg);
     socket.on("event:server-chat-message", chatMsg);
+    socket.on("event:server-cursor-position", cursorPositionMsg);
 
     return () => {
       socket.off("event:server-message", dataMsg);
       socket.off("event:sync-visible-files", filesMsg);
       socket.off("event:server-chat-message", chatMsg);
+      socket.off("event:server-cursor-position", cursorPositionMsg);
     };
   }, [socket]);
 
@@ -184,6 +222,9 @@ const SocketProvider = ({ children }) => {
           sendChatMessage,
           chatMessages,
           propagateRoomState,
+          sendCursorPosition,
+          remoteCursorPositions,
+          setRemoteCursorPositions,
         }}
       >
         {children}
